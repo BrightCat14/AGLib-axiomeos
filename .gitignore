@@ -1,0 +1,11 @@
+app
+app.exe
+*.o
+*.png
+*.bmp
+*.jpeg
+*.jpg
+*.txt
+*.svg
+!test.png
+!test.jpg
