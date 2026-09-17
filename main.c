@@ -1,25 +1,12 @@
-/* ============================================================
- * AGLib — каркас приложения.
- *
- * Блоки, показанные здесь:
- *   - шапка: заголовок + адаптивный статус справа (под ресайз);
- *   - сайдбар-навигация: вкладки «Лог» / «Фото» / «Инфо» / «Настройки»;
- *   - основной регион зависит от активной вкладки;
- *   - вкладка «Фото»: картинки (JPEG/PNG) с подгонкой под область,
- *     клик по области — следующий кадр;
- *   - строка команд под логом: ввод + Enter — «отправка» (UTF-8);
- *   - тема и размер шрифта меняются на лету;
- *   - лог — сплошная лента, длинные строки переносятся по ширине окна.
- * ============================================================ */
 #include "aglib.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
 
-#define SIDE_X  20      /* левый край сайдбара */
-#define SIDE_W  160     /* ширина сайдбара */
-#define FIELD_X 200     /* левый край основного региона */
-#define FIELD_M 20      /* правый отступ */
+#define SIDE_X  20
+#define SIDE_W  160
+#define FIELD_X 200
+#define FIELD_M 20
 
 #define IMG_LIMIT 4
 
@@ -29,13 +16,17 @@ static ag_font  *g_font;
 static int g_win_w = 820, g_win_h = 560;
 static int g_font_px = 16;
 static int g_theme_green = 1;
-static int g_tab = 0;                       
+static int g_tab = 0;
+static int g_borders = 1;
+static int g_main_c[3] = { 22, 26, 36 };
 
-static ag_widget *g_log, *g_info;           
-static ag_widget *g_console;                
+static ag_widget *g_log, *g_info;
+static ag_widget *g_console;
 static ag_widget *g_btn_tab[4];
 static ag_widget *g_btn_theme, *g_btn_clear, *g_btn_exit;
 static ag_widget *g_sl_font;
+static ag_widget *g_tgl_borders;
+static ag_widget *g_sl_c[3];
 
 static int g_main_x, g_main_y, g_main_w, g_main_h;  
 static int g_con_y;                                  
@@ -48,16 +39,41 @@ static int g_img_cur = 0;
 static void log_line(const char *tag, const char *msg);
 static void show_tab(void);
 
-static void apply_theme(int green)
+static void apply_theme(void)
 {
     ag_ui_theme th = *ag_ui_default_theme();
     th.radius = 6;
-    if (green) {
+    th.borders = g_borders;
+    if (g_theme_green) {
         th.accent          = AG_RGB(88, 188, 120);
         th.accent_d        = AG_RGB(56, 128, 82);
         th.scrollbar       = AG_RGB(46, 74, 54);
         th.scrollbar_hover = AG_RGB(72, 110, 82);
     }
+    int r = g_main_c[0], g = g_main_c[1], b = g_main_c[2];
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    if (g < 0) g = 0;
+    if (g > 255) g = 255;
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    th.bg      = AG_RGB(r + 24 > 255 ? 255 : r + 24,
+                        g + 24 > 255 ? 255 : g + 24,
+                        b + 24 > 255 ? 255 : b + 24);
+    th.bg2     = AG_RGB(r + 14 > 255 ? 255 : r + 14,
+                        g + 14 > 255 ? 255 : g + 14,
+                        b + 14 > 255 ? 255 : b + 14);
+    th.hover   = AG_RGB(r + 40 > 255 ? 255 : r + 40,
+                        g + 40 > 255 ? 255 : g + 40,
+                        b + 40 > 255 ? 255 : b + 40);
+    th.pressed = AG_RGB(r - 6 < 0 ? 0 : r - 6,
+                        g - 6 < 0 ? 0 : g - 6,
+                        b - 6 < 0 ? 0 : b - 6);
+    th.border  = AG_RGB(r + 55 > 255 ? 255 : r + 55,
+                        g + 55 > 255 ? 255 : g + 55,
+                        b + 55 > 255 ? 255 : b + 55);
+    th.text    = (r * 299 + g * 587 + b * 114) > 140000
+                 ? AG_RGB(20, 24, 32) : AG_RGB(222, 222, 222);
     ag_ui_set_theme(g_ui, &th);
 }
 
@@ -103,27 +119,43 @@ static void on_layout(ag_ui *ui, int w, int h, void *ud)
 
 static void show_tab(void)
 {
-    const int off = -8000;                  
+    const int off = -8000;
     if (g_tab == 0) {
         ag_widget_set_rect(g_log,     g_main_x, g_main_y, g_main_w, g_main_h);
         ag_widget_set_rect(g_info,    off, 0, 1, 1);
-        ag_widget_set_rect(g_sl_font, off, 0, 1, 1);
         ag_widget_set_rect(g_console, g_main_x, g_con_y, g_main_w, 26);
+        ag_widget_set_rect(g_tgl_borders, off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_font, off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[0], off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[1], off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[2], off, 0, 1, 1);
     } else if (g_tab == 1) {
         ag_widget_set_rect(g_log,     off, 0, 1, 1);
         ag_widget_set_rect(g_info,    off, 0, 1, 1);
-        ag_widget_set_rect(g_sl_font, off, 0, 1, 1);
         ag_widget_set_rect(g_console, off, 0, 1, 1);
+        ag_widget_set_rect(g_tgl_borders, off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_font, off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[0], off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[1], off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[2], off, 0, 1, 1);
     } else if (g_tab == 2) {
         ag_widget_set_rect(g_log,     off, 0, 1, 1);
         ag_widget_set_rect(g_info,    g_main_x, g_main_y, g_main_w, g_main_h);
-        ag_widget_set_rect(g_sl_font, off, 0, 1, 1);
         ag_widget_set_rect(g_console, off, 0, 1, 1);
+        ag_widget_set_rect(g_tgl_borders, off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_font, off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[0], off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[1], off, 0, 1, 1);
+        ag_widget_set_rect(g_sl_c[2], off, 0, 1, 1);
     } else {
         ag_widget_set_rect(g_log,     off, 0, 1, 1);
         ag_widget_set_rect(g_info,    off, 0, 1, 1);
-        ag_widget_set_rect(g_sl_font, g_main_x, g_main_y, g_main_w, 30);
         ag_widget_set_rect(g_console, off, 0, 1, 1);
+        ag_widget_set_rect(g_tgl_borders, g_main_x, g_main_y,      g_main_w, 24);
+        ag_widget_set_rect(g_sl_font,     g_main_x, g_main_y + 64, g_main_w, 24);
+        ag_widget_set_rect(g_sl_c[0],     g_main_x, g_main_y + 108, g_main_w, 24);
+        ag_widget_set_rect(g_sl_c[1],     g_main_x, g_main_y + 152, g_main_w, 24);
+        ag_widget_set_rect(g_sl_c[2],     g_main_x, g_main_y + 196, g_main_w, 24);
     }
 }
 
@@ -150,7 +182,8 @@ static void draw_photo(ag_window *w)
     char cap[96];
     snprintf(cap, sizeof(cap), "%s  %dx%d  — клик по области — следующий",
              g_img_name[g_img_cur], iw, ih);
-    ag_set_color(w, ag_ui_default_theme()->text);
+    int luma = (g_main_c[0] * 299 + g_main_c[1] * 587 + g_main_c[2] * 114) / 1000;
+    ag_set_color(w, luma > 140 ? AG_RGB(20, 24, 32) : AG_RGB(222, 222, 222));
     ag_draw_text(w, g_main_x + 4, g_main_y + 4, cap);
 }
 
@@ -174,8 +207,23 @@ static void on_theme(ag_widget *wdg, void *ud)
 {
     (void)wdg; (void)ud;
     g_theme_green = !g_theme_green;
-    apply_theme(g_theme_green);
+    apply_theme();
     log_line("ui", g_theme_green ? "тема: зелёная" : "тема: стандартная");
+}
+
+static void on_borders(ag_widget *wdg, void *ud)
+{
+    (void)ud;
+    g_borders = ag_toggle_checked(wdg);
+    apply_theme();
+    log_line("ui", g_borders ? "рамки: вкл" : "рамки: выкл");
+}
+
+static void on_col(ag_widget *wdg, void *ud)
+{
+    int idx = (int)(intptr_t)ud;
+    g_main_c[idx] = (int)ag_slider_value(wdg);
+    apply_theme();
 }
 
 static void on_clear(ag_widget *wdg, void *ud)
@@ -234,13 +282,26 @@ static int on_event(ag_window *w, const ag_event *e, void *ud)
 
     if (e->type == AG_EVENT_EXPOSE) {
         ag_begin_frame(w);
-        ag_clear(w, AG_RGB(20, 24, 32));
+        ag_clear(w, AG_RGB(g_main_c[0], g_main_c[1], g_main_c[2]));
 
+        int luma = (g_main_c[0] * 299 + g_main_c[1] * 587 + g_main_c[2] * 114) / 1000;
+        ag_color hc = luma > 140 ? AG_RGB(20, 24, 32) : AG_RGB(222, 222, 222);
+        ag_set_color(w, hc);
         ag_draw_text(w, 20, 14, "AGLib");
         char st[96];
         snprintf(st, sizeof(st), "%dx%d  %s  %dpx",
                  g_win_w, g_win_h, ag_get_platform(), g_font_px);
         ag_draw_text(w, g_win_w - 20 - ag_font_text_width(g_font, st), 14, st);
+
+        if (g_tab == 3) {
+            ag_set_color(w, hc);
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "Шрифт %dpx", g_font_px);
+            ag_draw_text(w, g_main_x, g_main_y + 44, lbl);
+            ag_draw_text(w, g_main_x, g_main_y + 88, "Главный цвет — R");
+            ag_draw_text(w, g_main_x, g_main_y + 132, "G");
+            ag_draw_text(w, g_main_x, g_main_y + 176, "B");
+        }
 
         ag_ui_draw(g_ui);
 
@@ -272,7 +333,7 @@ int main(void)
     apply_font_px(16);                      
 
     g_ui = ag_ui_create(g_win);
-    apply_theme(1);
+    apply_theme();
 
     g_btn_tab[0] = ag_ui_add_button(g_ui, "Лог", 0, 0, 0, 0, on_tab, (void *)(intptr_t)0);
     g_btn_tab[1] = ag_ui_add_button(g_ui, "Фото", 0, 0, 0, 0, on_tab, (void *)(intptr_t)1);
@@ -293,12 +354,20 @@ int main(void)
         "«Лог» — лента событий; длинные строки переносятся по ширине окна.\n"
         "Строка под логом — команды: ввод + Enter (clear, about, exit).\n"
         "«Фото» — картинки JPEG/PNG, вписываются в область; клик — смена кадра.\n"
-        "«Настройки» — размер шрифта слайдером; тема — кнопкой на сайдбаре.\n"
+        "«Настройки» — тумблер рамок, слайдер шрифта и главный цвет R/G/B.\n"
         "Ввод — UTF-8, русская раскладка работает (X11 и Windows).\n"
         "Esc — выход, если фокус не в поле ввода.\n");
 
     g_sl_font = ag_ui_add_slider(g_ui, 10.0f, 26.0f, 16.0f,
                                  0, 0, 0, 0, on_font, NULL);
+    g_tgl_borders = ag_ui_add_toggle(g_ui, "Рамки",
+                                     g_borders, 0, 0, on_borders, NULL);
+    g_sl_c[0] = ag_ui_add_slider(g_ui, 0.0f, 255.0f, (float)g_main_c[0],
+                                 0, 0, 0, 0, on_col, (void *)(intptr_t)0);
+    g_sl_c[1] = ag_ui_add_slider(g_ui, 0.0f, 255.0f, (float)g_main_c[1],
+                                 0, 0, 0, 0, on_col, (void *)(intptr_t)1);
+    g_sl_c[2] = ag_ui_add_slider(g_ui, 0.0f, 255.0f, (float)g_main_c[2],
+                                 0, 0, 0, 0, on_col, (void *)(intptr_t)2);
 
     ag_ui_set_layout_cb(g_ui, on_layout, NULL);
     on_layout(g_ui, 820, 560, NULL);        

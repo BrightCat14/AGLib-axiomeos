@@ -5,7 +5,6 @@
 extern "C" {
 #endif
 
-/* ======================== Версия ======================== */
 #define AGLIB_VERSION_MAJOR 0
 #define AGLIB_VERSION_MINOR 2
 #define AGLIB_VERSION_PATCH 0
@@ -133,8 +132,9 @@ typedef struct {
     ag_color track;             
     ag_color thumb;             
     ag_color scrollbar;         
-    ag_color scrollbar_hover;   
-    int      radius;            
+ag_color scrollbar_hover;   
+    int      radius;
+    int      borders;
 } ag_ui_theme;
 
 AGAPI ag_ui *ag_ui_create(ag_window *win);
@@ -175,4 +175,4 @@ AGAPI void ag_sleep_ms(unsigned int ms);
 }
 #endif
 
-#endif /* AGLIB_H */
+#endif

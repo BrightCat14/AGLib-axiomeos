@@ -1,11 +1,3 @@
-/* ============================================================
- *  AGLib — кросс-платформенная GUI-библиотека на C
- *  Бэкенды: Win32 (Windows NT) и X11 (UNIX)
- *  Шрифты: GDI (Win32) / FreeType (X11)
- *  Изображения: PNG — libpng, JPEG — libjpeg, SVG — nanosvg,
- *               BMP — свой декодер
- * ============================================================ */
-
 #include "aglib.h"
 
 #ifndef _WIN32
@@ -94,18 +86,14 @@ struct ag_glyph {
 
 struct ag_font {
     unsigned int px;
-    int ascent, descent;          
-#ifndef _WIN32
-    FT_Face face;
+    int ascent, descent;
     struct ag_glyph cache[AG_GLYPH_CACHE];
     int cache_next;
+#ifdef _WIN32
+    HFONT hfont;
+    HDC   dc;
 #else
-    HFONT  hfont;
-    HDC    dc;                    
-    HDC    ddc;                   
-    HBITMAP dib;
-    unsigned char *bits;
-    int    pitch, bw, bh;
+    FT_Face face;
 #endif
 };
 
@@ -458,13 +446,12 @@ void ag_window_redraw(ag_window *w)
     w->redraw_pending = 1;
 }
 
-#if !defined(_WIN32)
 static int ag_backend_glyph(ag_font *f, ag_u32 cp, struct ag_glyph *g);
 
 static const struct ag_glyph *ag_font_glyph(ag_font *f, ag_u32 cp)
 {
     for (int i = 0; i < AG_GLYPH_CACHE; ++i)
-        if (f->cache[i].cp == cp && f->cache[i].bits) return &f->cache[i];
+        if (f->cache[i].cp == cp) return &f->cache[i];
 
     struct ag_glyph *slot = &f->cache[f->cache_next];
     f->cache_next = (f->cache_next + 1) % AG_GLYPH_CACHE;
@@ -487,7 +474,6 @@ static void draw_glyph_bits(ag_window *w, int penx, int baseline,
             if (a) blend_argb(w, penx + g->xoff + col, baseline + g->yoff + row, rgb, a);
         }
 }
-#endif /* !_WIN32 */
 
 ag_image *ag_image_create(int w, int h)
 {
@@ -1160,19 +1146,20 @@ void ag_draw_image(ag_window *w, int x, int y, int wc, int hc, const ag_image *i
 }
 
 static const ag_ui_theme ag_default_theme = {
-    AG_RGB(36,36,40),   
-    AG_RGB(46,46,52),   
-    AG_RGB(92,92,102),  
-    AG_RGB(86,156,214), 
-    AG_RGB(60,120,170), 
+    AG_RGB(36,36,40),
+    AG_RGB(46,46,52),
+    AG_RGB(92,92,102),
+    AG_RGB(86,156,214),
+    AG_RGB(60,120,170),
     AG_RGB(222,222,222),
-    AG_RGB(56,56,64),   
-    AG_RGB(24,24,30),   
-    AG_RGB(60,60,70),   
+    AG_RGB(56,56,64),
+    AG_RGB(24,24,30),
+    AG_RGB(60,60,70),
     AG_RGB(150,150,160),
-    AG_RGB(70,70,80),   
-    AG_RGB(94,94,106),  
-    4                   
+    AG_RGB(70,70,80),
+    AG_RGB(94,94,106),
+    4,
+    1
 };
 
 typedef enum {
@@ -1183,7 +1170,7 @@ typedef enum {
     AG_WIDGET_TEXTVIEW_T
 } ag_widget_kind;
 
-#define AG_WIDGET_SB_W 12   /* ширина сколлбара textview, px */
+#define AG_WIDGET_SB_W 12
 
 struct ag_widget {
     ag_widget_kind kind;
@@ -1629,8 +1616,10 @@ static void ui_draw_button(ag_ui *ui, ag_widget *wdg)
     ag_color bg = wdg->pressed ? ui->th.pressed : (wdg->hovered ? ui->th.hover : ui->th.bg);
     ag_set_color(win, bg);
     ag_fill_round_rect(win, wdg->x, wdg->y, wdg->w, wdg->h, ui->th.radius);
-    ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
-    ag_draw_round_rect(win, wdg->x, wdg->y, wdg->w, wdg->h, ui->th.radius);
+    if (ui->th.borders) {
+        ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
+        ag_draw_round_rect(win, wdg->x, wdg->y, wdg->w, wdg->h, ui->th.radius);
+    }
 
     const char *lab = wdg->u.button.label;
     int tw = ui_text_width(ui, lab);
@@ -1657,8 +1646,10 @@ static void ui_draw_slider(ag_ui *ui, ag_widget *wdg)
     int hx = wdg->x + (int)(tw * t);
     ag_set_color(win, wdg->hovered || wdg->pressed ? ui->th.thumb : AG_RGB(120,120,130));
     ag_fill_round_rect(win, hx, wdg->y, UI_THUMB_W, wdg->h, ui->th.radius);
-    ag_set_color(win, ui->th.border);
-    ag_draw_round_rect(win, hx, wdg->y, UI_THUMB_W, wdg->h, ui->th.radius);
+    if (ui->th.borders) {
+        ag_set_color(win, ui->th.border);
+        ag_draw_round_rect(win, hx, wdg->y, UI_THUMB_W, wdg->h, ui->th.radius);
+    }
 }
 
 static void ui_draw_toggle(ag_ui *ui, ag_widget *wdg)
@@ -1669,8 +1660,10 @@ static void ui_draw_toggle(ag_ui *ui, ag_widget *wdg)
 
     ag_set_color(win, wdg->u.toggle.on ? ui->th.accent : ui->th.bg2);
     ag_fill_round_rect(win, bx, by, sz, sz, ui->th.radius);
-    ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
-    ag_draw_round_rect(win, bx, by, sz, sz, ui->th.radius);
+    if (ui->th.borders) {
+        ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
+        ag_draw_round_rect(win, bx, by, sz, sz, ui->th.radius);
+    }
 
     if (wdg->u.toggle.on) {
         ag_set_color(win, AG_WHITE);
@@ -1685,11 +1678,13 @@ static void ui_draw_toggle(ag_ui *ui, ag_widget *wdg)
 static void ui_draw_textbox(ag_ui *ui, ag_widget *wdg)
 {
     ag_window *win = ui->win;
-    if (!ui->font) {                       
+if (!ui->font) {
         ag_set_color(win, ui->th.bg2);
         ag_fill_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
-        ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
-        ag_draw_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
+        if (ui->th.borders) {
+            ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
+            ag_draw_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
+        }
         ag_set_color(win, ui->th.text);
         ui_draw_text(ui, wdg->x + 4, wdg->y + 3, wdg->u.textbox.buf);
         return;
@@ -1697,8 +1692,10 @@ static void ui_draw_textbox(ag_ui *ui, ag_widget *wdg)
 
     ag_set_color(win, ui->th.bg2);
     ag_fill_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
-    ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
-    ag_draw_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
+    if (ui->th.borders) {
+        ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
+        ag_draw_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
+    }
 
     const char *txt = wdg->u.textbox.buf;
     int curs = wdg->u.textbox.cursor;
@@ -1725,7 +1722,7 @@ static void ui_draw_textbox(ag_ui *ui, ag_widget *wdg)
 
     int start = 0;
     if (total > maxw && wb[curs] > maxw) {
-        for (int i = curs; i > 0; --i)
+        for (int i = 0; i < curs; ++i)
             if (wb[curs] - wb[i] <= maxw) { start = i; break; }
     }
     int caret_x = wb[curs] - wb[start];
@@ -1845,8 +1842,10 @@ static void ui_draw_textview(ag_ui *ui, ag_widget *wdg)
 
     ag_set_color(win, ui->th.bg2);
     ag_fill_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
-    ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
-    ag_draw_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
+    if (ui->th.borders) {
+        ag_set_color(win, wdg->focused ? ui->th.accent : ui->th.border);
+        ag_draw_rect(win, wdg->x, wdg->y, wdg->w, wdg->h);
+    }
 
     int lh = ui_text_height(ui);
     if (lh <= 1) lh = 16;
@@ -2053,8 +2052,10 @@ int ag_ui_handle(ag_ui *ui, const ag_event *ev)
             case AGK_DELETE:    ag_tb_erase(f, 0); if (f->cb) f->cb(f, f->ud); return 1;
             case AGK_LEFT: case AGK_RIGHT: case AGK_HOME: case AGK_END:
                 ag_tb_move(f, kc); return 1;
-            case AGK_RETURN:    f->u.textbox.submit = 1;
-                                if (f->cb) f->cb(f, f->ud); return 1;
+            case AGK_RETURN:
+            f->u.textbox.submit = 1;
+            if (f->cb) f->cb(f, f->ud);
+            return 1;
             case AGK_ESC:       f->focused = 0; ui->focused = NULL; return 1;
             default: break;
             }
@@ -2087,46 +2088,40 @@ int ag_ui_handle(ag_ui *ui, const ag_event *ev)
 static int ag_font_char_width(const ag_font *f, ag_u32 cp)
 {
     if (!f) return 0;
-    wchar_t wc[2];
-    int n = 0;
-    if (cp < 0x10000) { wc[0] = (wchar_t)cp; n = 1; }
-    else {
-        cp -= 0x10000;
-        wc[0] = (wchar_t)(0xD800 + (cp >> 10));
-        wc[1] = (wchar_t)(0xDC00 + (cp & 0x3FF));
-        n = 2;
-    }
-    int total = 0;
-    for (int i = 0; i < n; ++i) {
-        int adv = 0;
-        if (GetCharWidth32W(f->dc, wc[i], wc[i], &adv) && adv > 0) total += adv;
-    }
-    if (total <= 0) total = font_height(f) / 2;
-    return total;
+    const struct ag_glyph *g = ag_font_glyph((ag_font *)f, cp);
+    if (!g) return font_height(f) / 2;
+    return g->adv;
 }
 
-static void font_ensure_dib(ag_font *f, int w, int h)
+static int ag_backend_glyph(ag_font *f, ag_u32 cp, struct ag_glyph *g)
 {
-    if (f->ddc && f->bw >= w && f->bh >= h) return;
-    if (f->dib) {
-        DeleteObject(f->dib);
-        DeleteDC(f->ddc);
-        f->dib = NULL; f->ddc = NULL;
+    if (!f || !f->dc || !f->hfont || cp > 0xFFFF) return -1;
+    if (cp < 0x20) return -1;
+    MAT2 mat = {{0,1},{0,0},{0,0},{0,1}};
+    GLYPHMETRICS gm;
+    SelectObject(f->dc, f->hfont);
+    DWORD sz = GetGlyphOutlineW(f->dc, (UINT)cp, GGO_GRAY8_BITMAP, &gm, 0, NULL, &mat);
+    if (sz == GDI_ERROR || sz == 0) return -1;
+    unsigned char *buf = (unsigned char *)malloc(sz);
+    if (!buf) return -1;
+    if (GetGlyphOutlineW(f->dc, (UINT)cp, GGO_GRAY8_BITMAP, &gm, sz, buf, &mat) == GDI_ERROR) {
+        free(buf);
+        return -1;
     }
-    BITMAPINFO bi; memset(&bi, 0, sizeof(bi));
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth  = w;
-    bi.bmiHeader.biHeight = -h;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-    f->ddc = CreateCompatibleDC(NULL);
-    if (!f->ddc) return;
-    f->dib = CreateDIBSection(f->ddc, &bi, DIB_RGB_COLORS, (void **)&f->bits, NULL, 0);
-    if (!f->dib) { DeleteDC(f->ddc); f->ddc = NULL; return; }
-    f->pitch = ((w * 32 + 31) / 32) * 4;
-    f->bw = w; f->bh = h;
-    DeleteObject(SelectObject(f->ddc, f->dib));
+    g->adv  = gm.gmCellIncX;
+    g->xoff = gm.gmptGlyphOrigin.x;
+    g->yoff = -gm.gmptGlyphOrigin.y;
+    g->w    = (int)gm.gmBlackBoxX;
+    g->h    = (int)gm.gmBlackBoxY;
+    if (g->w <= 0 || g->h <= 0) { free(buf); g->bits = NULL; return 0; }
+    int pitch = ((g->w + 3) / 4) * 4;
+    g->bits = (ag_u8 *)malloc(g->w * g->h);
+    if (!g->bits) { free(buf); return -1; }
+    for (int y = 0; y < g->h; ++y)
+        for (int x = 0; x < g->w; ++x)
+            g->bits[y * g->w + x] = (ag_u8)((buf[y * pitch + x] * 255) / 64);
+    free(buf);
+    return 0;
 }
 
 static void ag_draw_text_font(ag_window *w, int x, int y, ag_font *f, const char *text)
@@ -2134,49 +2129,19 @@ static void ag_draw_text_font(ag_window *w, int x, int y, ag_font *f, const char
     if (!w || !text) return;
     if (!f) { ag_draw_text8x8(w, x, y, text); return; }
 
-    int nbytes = (int)strlen(text);
-    int nwc = nbytes + 1;
-    wchar_t *ws = (wchar_t *)malloc(sizeof(wchar_t) * nwc);
-    if (!ws) return;
-    int k = 0;
-    const char *p = text;
-    while (*p && k < nbytes) {
-        ag_u32 cp = utf8_decode(&p);
-        if (cp < 0x10000) ws[k++] = (wchar_t)cp;
-        else {
-            cp -= 0x10000;
-            ws[k++] = (wchar_t)(0xD800 + (cp >> 10));
-            ws[k++] = (wchar_t)(0xDC00 + (cp & 0x3FF));
-        }
-    }
-
-    RECT rc = {0, 0, 0, 0};
-    SelectObject(f->dc, f->hfont);
-    DrawTextW(f->dc, ws, k, &rc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX | DT_NOEXPAND);
-    int tw = rc.right, th = rc.bottom;
-    if (tw <= 0 || th <= 0) { free(ws); return; }
-
-    font_ensure_dib(f, tw + 8, font_height(f) + 8);
-    if (!f->ddc) { free(ws); return; }
-
-    RECT drc = {0, 0, f->bw, f->bh};
-    SetBkColor(f->ddc, 0x000000);
-    FillRect(f->ddc, &drc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    SetBkMode(f->ddc, TRANSPARENT);
-    SetTextColor(f->ddc, 0x00FFFFFF);
-    SelectObject(f->ddc, f->hfont);
-    RECT trc = {0, 0, f->bw, f->bh};
-    DrawTextW(f->ddc, ws, k, &trc, DT_SINGLELINE | DT_NOPREFIX | DT_NOEXPAND);
-
     ag_u32 rgb = w->current_color;
-    for (int row = 0; row < font_height(f); ++row) {
-        for (int col = 0; col < tw; ++col) {
-            const unsigned char *px32 = f->bits + row * f->pitch + col * 4;
-            int a = px32[2];
-            if (a) blend_argb(w, x + col, y + row, rgb, a);
-        }
+    int baseline = y + f->ascent;
+    int penx = x;
+    const char *p = text;
+    while (*p) {
+        ag_u32 cp = utf8_decode(&p);
+        if (!cp) break;
+        if (cp == '\n') { baseline += font_height(f); penx = x; continue; }
+        const struct ag_glyph *g = ag_font_glyph(f, cp);
+        if (!g) { penx += font_height(f) / 2; continue; }
+        draw_glyph_bits(w, penx, baseline, g, rgb);
+        penx += g->adv;
     }
-    free(ws);
 }
 
 ag_font *ag_font_open(const char *name, unsigned int px)
@@ -2224,8 +2189,8 @@ ag_font *ag_font_default(unsigned int px)
 void ag_font_close(ag_font *f)
 {
     if (!f) return;
-    if (f->dib) { DeleteObject(f->dib); }
-    if (f->ddc) DeleteDC(f->ddc);
+    for (int i = 0; i < AG_GLYPH_CACHE; ++i)
+        free(f->cache[i].bits);
     if (f->dc)  DeleteDC(f->dc);
     if (f->hfont) DeleteObject(f->hfont);
     ag_mem_free(f);
@@ -2983,4 +2948,4 @@ void ag_end_frame(ag_window *w)
     XFlush(w->dpy);
 }
 
-#endif /* _WIN32 */
+#endif
