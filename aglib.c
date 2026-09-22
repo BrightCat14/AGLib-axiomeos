@@ -1,14 +1,23 @@
 #include "aglib.h"
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__AXIOMEOS__)
 #define _POSIX_C_SOURCE 200809L
 #endif
 
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <time.h>
-#include <locale.h>
+#if defined(__AXIOMEOS__)
+#  include <stdint.h>
+#  include <stddef.h>
+#  include "stdlib.h"
+#  include "string.h"
+#  include "stdio.h"
+#  include "time.h"
+#else
+#  include <stdlib.h>
+#  include <string.h>
+#  include <stdio.h>
+#  include <time.h>
+#  include <locale.h>
+#endif
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
@@ -17,6 +26,8 @@
 #  ifndef DT_NOEXPAND
 #    define DT_NOEXPAND 0x00001000u
 #  endif
+#elif defined(__AXIOMEOS__)
+/* axiomeOS userspace: minimal freestanding; no X11/FreeType. */
 #else
 #  include <X11/Xlib.h>
 #  include <X11/Xutil.h>
@@ -59,7 +70,22 @@ struct ag_window {
     HDC       memdc;
     HBITMAP   membmp;
     HBITMAP   oldbmp;
-    int       pending_high;      
+    int       pending_high;
+#elif defined(__AXIOMEOS__)
+    /* axiomeOS compositor window (SHM) */
+    struct ax_wm_hdr *hdr;
+    uint32_t *shm_pixels;       /* hdr+32 */
+    long shmid;
+    int evfd;
+    unsigned long gen;
+    int gen_valid;
+    int mouse_x, mouse_y;
+    uint32_t mouse_btn;
+    int drm_fd;                 /* -1 when using SHM path; else DRI fd for standalone */
+    uint32_t drm_handle;
+    uint32_t drm_w, drm_h, drm_pitch;
+    uint64_t drm_size;
+    uint32_t *drm_pixels;       /* mmap'd dumb buffer */
 #else
     Display  *dpy;
     Window    win;
@@ -67,8 +93,8 @@ struct ag_window {
     XImage   *img;
     Atom      wm_delete;
     int       screen;
-    XIM       xim;                
-    XIC       xic;                
+    XIM       xim;
+    XIC       xic;
 #endif
 
     struct ag_window *next;
@@ -92,6 +118,9 @@ struct ag_font {
 #ifdef _WIN32
     HFONT hfont;
     HDC   dc;
+#elif defined(__AXIOMEOS__)
+    /* no native font backend; glyphs synthesized from 8x8 fallback */
+    int dummy;
 #else
     FT_Face face;
 #endif
@@ -106,6 +135,8 @@ static inline int font_height(const ag_font *f)
 {
 #ifdef _WIN32
     return f->ascent + f->descent;
+#elif defined(__AXIOMEOS__)
+    return f->ascent - f->descent;
 #else
     return f->ascent - f->descent;
 #endif
@@ -118,6 +149,11 @@ void ag_sleep_ms(unsigned int ms)
 {
 #ifdef _WIN32
     Sleep(ms);
+#elif defined(__AXIOMEOS__)
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
 #else
     struct timespec ts;
     ts.tv_sec  = ms / 1000;
@@ -125,6 +161,64 @@ void ag_sleep_ms(unsigned int ms)
     nanosleep(&ts, NULL);
 #endif
 }
+
+#ifdef __AXIOMEOS__
+/* ---- axiomeOS helpers: syscall + wm/input ABI (self-contained, no external headers) ---- */
+static int g_ax_argc = 0;
+static char **g_ax_argv = NULL;
+void ag_set_args(int argc, char **argv){ g_ax_argc = argc; g_ax_argv = argv; }
+
+static long ax_syscall(long n, long a1, long a2, long a3, long a4, long a5, long a6){
+    register long r0 __asm__("rax") = n;
+    register long r1 __asm__("rdi") = a1;
+    register long r2 __asm__("rsi") = a2;
+    register long r3 __asm__("rdx") = a3;
+    register long r4 __asm__("r10") = a4;
+    register long r5 __asm__("r8")  = a5;
+    register long r6 __asm__("r9")  = a6;
+    long ret;
+    __asm__ volatile("syscall" : "=a"(ret) : "r"(r0),"r"(r1),"r"(r2),"r"(r3),"r"(r4),"r"(r5),"r"(r6) : "%rcx","%r11","memory");
+    return ret;
+}
+#define AX_SYS_OPEN 11
+#define AX_SYS_CLOSE 12
+#define AX_SYS_READ 8
+#define AX_SYS_WRITE 7
+#define AX_SYS_SHM_CREATE 29
+#define AX_SYS_SHM_ATTACH 30
+#define AX_SYS_MMAP 55
+#define AX_SYS_YIELD 1
+/* minimal wm/input abi copies */
+#define AX_WM_MAGIC 0x57494E44u
+#define AX_WM_EV_KEY 1u
+#define AX_WM_EV_MOUSE 2u
+#define AX_WM_HDR_SIZE 32u
+#define AX_WM_WIN_W 620u
+#define AX_WM_WIN_H 420u
+#define AX_INPUT_KEY_UP 0x100u
+#define AX_INPUT_KEY_DOWN 0x101u
+#define AX_INPUT_KEY_LEFT 0x102u
+#define AX_INPUT_KEY_RIGHT 0x103u
+#define AX_INPUT_KEY_HOME 0x104u
+#define AX_INPUT_KEY_END 0x105u
+#define AX_INPUT_KEY_DELETE 0x109u
+#define AX_INPUT_BTN_LEFT 0x01u
+struct ax_wm_event{ uint32_t type; uint32_t code; int32_t x; int32_t y; };
+struct ax_wm_hdr{ uint32_t magic; uint32_t w; uint32_t h; volatile uint32_t ready; volatile uint32_t closed; volatile uint32_t seq; volatile uint32_t gen; uint32_t pad; };
+#define AX_DRI_MAGIC 0x41584452u
+#define AX_DRI_CMD_SIZE 32u
+enum { AX_DRI_GET_MODE=1, AX_DRI_DUMB_CREATE=2, AX_DRI_DUMB_MAP=3, AX_DRI_DUMB_DESTROY=4, AX_DRI_PRESENT=5 };
+struct ax_dri_mode{ uint32_t width; uint32_t height; uint32_t pitch; uint32_t bpp; uint32_t format; };
+struct ax_dri_cmd{ uint32_t magic; uint32_t op; uint32_t args[6]; };
+static long ax_parse_num(const char *s, long *out){
+    long v=0; if(!s||!*s||!out) return -1;
+    while(*s){ if(*s<'0'||*s>'9') return -1; v=v*10+(*s-'0'); if(v>0x7FFFFFFFL) return -1; s++; }
+    *out=v; return 0;
+}
+static void ax_barrier(void){ __sync_synchronize(); }
+#else
+void ag_set_args(int argc, char **argv){ (void)argc; (void)argv; }
+#endif
 
 static void *ag_mem_alloc(size_t sz) { return calloc(1, sz); }
 static void  ag_mem_free(void *p)    { free(p); }
@@ -2513,6 +2607,275 @@ void ag_end_frame(ag_window *w)
     HDC hdc = GetDC(w->hwnd);
     BitBlt(hdc, 0, 0, w->width, w->height, w->memdc, 0, 0, SRCCOPY);
     ReleaseDC(w->hwnd, hdc);
+}
+
+#elif defined(__AXIOMEOS__)
+
+/* ---- axiomeOS backend: fonts (8x8 fallback), input, windowing via SHM + wm_abi ---- */
+static int ag_font_char_width(const ag_font *f, ag_u32 cp){
+    (void)f; (void)cp;
+    if(!f) return 8;
+    /* scale from px: 8px base */
+    int scale = f->px < 8 ? 1 : f->px / 8;
+    return 8 * scale;
+}
+static int ag_backend_glyph(ag_font *f, ag_u32 cp, struct ag_glyph *g){
+    if(!f||!g) return -1;
+    if(cp < 0x20 || cp > 0x7e) return -1;
+    /* synthesize 8x8 glyph scaled to px: we fill bits as 1bpp alpha */
+    int scale = f->px < 8 ? 1 : f->px / 8;
+    if(scale<1) scale=1;
+    int w = 8*scale, h = 8*scale;
+    g->w = w; g->h = h;
+    g->xoff = 0; g->yoff = 0;
+    g->adv = w;
+    g->bits = (ag_u8*)malloc(w*h);
+    if(!g->bits) return -1;
+    memset(g->bits,0,w*h);
+    const ag_u8 *src = ag_font8x8[cp-0x20];
+    for(int row=0;row<8;row++){
+        ag_u8 bits = src[row];
+        for(int col=0;col<8;col++){
+            if(!(bits & (0x01u << col))) continue;
+            for(int dy=0;dy<scale;dy++) for(int dx=0;dx<scale;dx++){
+                int x = col*scale+dx, y=row*scale+dy;
+                g->bits[y*w+x]=255;
+            }
+        }
+    }
+    return 0;
+}
+static void ag_draw_text_font(ag_window *w, int x, int y, ag_font *f, const char *text){
+    if(!w||!text) return;
+    if(!f){ ag_draw_text8x8(w,x,y,text); return; }
+    ag_u32 rgb = w->current_color;
+    int baseline = y + f->ascent;
+    int penx = x;
+    const char *p=text;
+    while(*p){
+        ag_u32 cp = utf8_decode(&p);
+        if(!cp) break;
+        if(cp=='\n'){ baseline+=font_height(f); penx=x; continue; }
+        const struct ag_glyph *g = ag_font_glyph((ag_font*)f, cp);
+        if(!g){ penx+=font_height(f)/2; continue; }
+        draw_glyph_bits(w, penx, baseline, g, rgb);
+        penx+=g->adv;
+    }
+}
+static int ag_backend_keyctl(int raw){
+    switch(raw){
+    case 8: case 127: return AGK_BACKSPACE;
+    case AX_INPUT_KEY_DELETE: return AGK_DELETE;
+    case AX_INPUT_KEY_LEFT: return AGK_LEFT;
+    case AX_INPUT_KEY_RIGHT: return AGK_RIGHT;
+    case AX_INPUT_KEY_HOME: return AGK_HOME;
+    case AX_INPUT_KEY_END: return AGK_END;
+    case '\n': case '\r': return AGK_RETURN;
+    case '\t': return AGK_TAB;
+    case AX_INPUT_KEY_UP: return AGK_UP;
+    case AX_INPUT_KEY_DOWN: return AGK_DOWN;
+    case 27: return AGK_ESC;
+    default: return AGK_NONE;
+    }
+}
+ag_font *ag_font_open(const char *path, unsigned int px){
+    (void)path;
+    if(!px) return NULL;
+    ag_font *f = (ag_font*)ag_mem_alloc(sizeof(ag_font));
+    if(!f) return NULL;
+    f->px = px;
+    f->ascent = (int)(px * 0.8);
+    f->descent = -(int)(px * 0.2);
+    if(f->descent==0) f->descent=-2;
+    return f;
+}
+ag_font *ag_font_default(unsigned int px){
+    return ag_font_open("default", px);
+}
+void ag_font_close(ag_font *f){
+    if(!f) return;
+    for(int i=0;i<AG_GLYPH_CACHE;i++) free(f->cache[i].bits);
+    ag_mem_free(f);
+}
+int ag_font_ascent(const ag_font *f){ return f?f->ascent:0; }
+int ag_font_descent(const ag_font *f){ return f?f->descent:0; }
+int ag_font_height(const ag_font *f){ return f?(f->ascent - f->descent):0; }
+
+int ag_init(void){ return 0; }
+void ag_shutdown(void){ }
+const char *ag_get_platform(void){ return "axiomeos"; }
+
+static int ax_close_fd(int fd){ return (int)ax_syscall(AX_SYS_CLOSE,(long)fd,0,0,0,0,0); }
+static long ax_read_fd(int fd, void *buf, size_t len){ return ax_syscall(AX_SYS_READ,(long)fd,(long)buf,(long)len,0,0,0); }
+
+ag_window *ag_window_create(const char *title, int width, int height){
+    (void)width; (void)height;
+    long shmid=-1, evfd=-1, gen=-1;
+    int have_wm=0;
+    if(g_ax_argc>=6 && g_ax_argv && strcmp(g_ax_argv[1],"--wm")==0){
+        if(ax_parse_num(g_ax_argv[2],&shmid)==0 && shmid>0 && ax_parse_num(g_ax_argv[5],&evfd)==0 && evfd>2 && evfd<32){
+            have_wm=1;
+            if(g_ax_argc>6 && ax_parse_num(g_ax_argv[6],&gen)==0) {}
+        }
+    }
+    if(!have_wm){
+        /* fallback: try standalone DRI (requires SYSTEM role); try to open dri device */
+        /* not implemented as compositor path: fail gracefully */
+        return NULL;
+    }
+    /* sanitize fds: keep 0,1,2 and evfd */
+    for(int fd=0; fd<32; fd++){
+        if(fd==0||fd==1||fd==2||fd==(int)evfd) continue;
+        ax_close_fd(fd);
+    }
+    void *base = (void*)ax_syscall(AX_SYS_SHM_ATTACH, shmid,0,0,0,0,0);
+    if(!base || (long)base==-1) return NULL;
+    struct ax_wm_hdr *hdr = (struct ax_wm_hdr*)base;
+    if(hdr->magic!=AX_WM_MAGIC || hdr->w==0 || hdr->h==0 || hdr->w>AX_WM_WIN_W || hdr->h>AX_WM_WIN_H){
+        return NULL;
+    }
+    if(gen>=0 && (unsigned long)gen != hdr->gen) return NULL;
+    ag_window *w = (ag_window*)ag_mem_alloc(sizeof(ag_window));
+    if(!w) return NULL;
+    memset(w,0,sizeof(*w));
+    w->hdr = hdr;
+    w->shm_pixels = (uint32_t*)((uint8_t*)base + AX_WM_HDR_SIZE);
+    w->shmid = shmid;
+    w->evfd = (int)evfd;
+    w->gen = (unsigned long)(gen>=0?gen:hdr->gen);
+    w->gen_valid = gen>=0?1:0;
+    w->width = hdr->w;
+    w->height = hdr->h;
+    w->current_color = AG_WHITE;
+    w->font_size = 16;
+    strncpy(w->title, title?title:"AGLib", sizeof(w->title)-1);
+    w->backbuf = (ag_u32*)calloc((size_t)w->width*w->height, sizeof(ag_u32));
+    if(!w->backbuf){ ag_mem_free(w); return NULL; }
+    for(int i=0;i<w->width*w->height;i++) w->backbuf[i]=0xFF000000u;
+    w->drm_fd=-1;
+    w->next=g_windows; g_windows=w;
+    return w;
+}
+void ag_window_destroy(ag_window *w){
+    if(!w) return;
+    ag_window **pp=&g_windows; while(*pp && *pp!=w) pp=&(*pp)->next; if(*pp) *pp=w->next;
+    if(w->evfd>=0) ax_close_fd(w->evfd);
+    free(w->backbuf);
+    ag_mem_free(w);
+}
+void ag_window_set_title(ag_window *w, const char *title){
+    if(!w||!title) return; strncpy(w->title,title,sizeof(w->title)-1);
+}
+void ag_window_set_size(ag_window *w, int width, int height){ (void)w; (void)width; (void)height; }
+void ag_window_get_size(ag_window *w, int *width, int *height){
+    if(!w) return; if(width) *width=w->width; if(height) *height=w->height;
+}
+void ag_window_set_callback(ag_window *w, ag_event_cb cb, void *ud){ if(w){ w->cb=cb; w->userdata=ud; } }
+void ag_window_show(ag_window *w){ (void)w; }
+void ag_window_hide(ag_window *w){ (void)w; }
+int ag_poll_events(void){
+    int any=0;
+    for(ag_window *w=g_windows; w; ){
+        ag_window *next=w->next;
+        if(w->gen_valid && w->hdr && w->hdr->gen != w->gen){
+            w->should_close=1;
+        }
+        if(w->hdr && w->hdr->closed){
+            w->should_close=1;
+        }
+        /* drain wm events (non-blocking: read returns 0 when empty) */
+        while(w->evfd>=0){
+            struct ax_wm_event we;
+            long r = ax_read_fd(w->evfd, &we, sizeof(we));
+            if(r==0) break; /* empty */
+            if(r<0) { w->should_close=1; break; }
+            if(r != (long)sizeof(we)) break;
+            ag_event ev; memset(&ev,0,sizeof(ev));
+            if(we.type==AX_WM_EV_MOUSE){
+                int prev_btn = w->mouse_btn;
+                uint32_t cur = we.code;
+                int dx = we.x - w->mouse_x;
+                int dy = we.y - w->mouse_y;
+                w->mouse_x = we.x; w->mouse_y = we.y; w->mouse_btn = cur;
+                uint32_t pressed = cur & ~prev_btn;
+                uint32_t released = ~cur & prev_btn;
+                if(dx!=0 || dy!=0 || cur!= (uint32_t)prev_btn){
+                    ev.type = AG_EVENT_MOUSE_MOVE;
+                    ev.x = ev.mouse_x = we.x;
+                    ev.y = ev.mouse_y = we.y;
+                    ev.button = cur;
+                    if(w->cb) w->cb(w,&ev,w->userdata);
+                    any=1;
+                }
+                if(pressed & AX_INPUT_BTN_LEFT){
+                    ev.type = AG_EVENT_MOUSE_DOWN;
+                    ev.x = ev.mouse_x = we.x; ev.y = ev.mouse_y = we.y; ev.button=1;
+                    if(w->cb) w->cb(w,&ev,w->userdata);
+                    any=1;
+                }
+                if(released & AX_INPUT_BTN_LEFT){
+                    ev.type = AG_EVENT_MOUSE_UP;
+                    ev.x = ev.mouse_x = we.x; ev.y = ev.mouse_y = we.y; ev.button=1;
+                    if(w->cb) w->cb(w,&ev,w->userdata);
+                    any=1;
+                }
+            } else if(we.type==AX_WM_EV_KEY){
+                uint32_t code = we.code;
+                ag_event ke; memset(&ke,0,sizeof(ke));
+                ke.type = AG_EVENT_KEY_DOWN;
+                ke.key = (int)code;
+                if(w->cb) w->cb(w,&ke,w->userdata);
+                any=1;
+                if(code>=32 && code<127){
+                    ag_event ce; memset(&ce,0,sizeof(ce));
+                    ce.type = AG_EVENT_CHAR;
+                    ce.key = (int)code;
+                    if(w->cb) w->cb(w,&ce,w->userdata);
+                } else if(code=='\n' || code=='\r'){
+                    ag_event ce; memset(&ce,0,sizeof(ce));
+                    ce.type = AG_EVENT_CHAR;
+                    ce.key = (int)code;
+                    if(w->cb) w->cb(w,&ce,w->userdata);
+                }
+            }
+        }
+        if(w->redraw_pending){
+            w->redraw_pending=0;
+            ag_event ev; memset(&ev,0,sizeof(ev)); ev.type=AG_EVENT_EXPOSE;
+            if(w->cb) w->cb(w,&ev,w->userdata);
+            any=1;
+        }
+        w=next;
+    }
+    for(ag_window *w=g_windows; w; w=w->next) if(!w->should_close) return 1;
+    return 0;
+}
+void ag_main_loop(void){
+    g_running=1;
+    /* initial expose */
+    for(ag_window *w=g_windows; w; w=w->next){
+        ag_event ev; memset(&ev,0,sizeof(ev)); ev.type=AG_EVENT_EXPOSE;
+        if(w->cb) w->cb(w,&ev,w->userdata);
+    }
+    while(g_running){
+        if(!ag_poll_events()) break;
+        ag_sleep_ms(16);
+    }
+}
+void ag_quit(void){ g_running=0; }
+void ag_begin_frame(ag_window *w){
+    if(!w||!w->hdr) return;
+    w->hdr->seq++;
+    ax_barrier();
+}
+void ag_end_frame(ag_window *w){
+    if(!w||!w->hdr||!w->shm_pixels||!w->backbuf) return;
+    /* copy backbuf -> shm (strip alpha: 0xFF -> 0x00 but high byte ignored) */
+    size_t n = (size_t)w->width * w->height;
+    for(size_t i=0;i<n;i++) w->shm_pixels[i] = w->backbuf[i] & 0x00FFFFFFu;
+    ax_barrier();
+    w->hdr->seq++;
+    if(!w->hdr->ready) w->hdr->ready=1;
 }
 
 #else

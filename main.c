@@ -322,11 +322,27 @@ static int on_event(ag_window *w, const ag_event *e, void *ud)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+#ifdef __AXIOMEOS__
+    ag_set_args(argc, argv);
+#endif
     if (ag_init() != 0) { fprintf(stderr, "init failed\n"); return 1; }
 
     g_win = ag_window_create("AGLib App", 820, 560);
+    if (!g_win) {
+        fprintf(stderr, "ag_window_create failed (on axiomeOS run via desktop launcher)\n");
+        /* On axiomeOS this happens when not launched as a guixd client (missing --wm). */
+        return 1;
+    }
+#ifdef __AXIOMEOS__
+    /* axiomeOS windows are fixed 620x420 (WM_WIN_W/H); adapt initial layout */
+    {
+        int aw=0, ah=0;
+        ag_window_get_size(g_win, &aw, &ah);
+        if (aw>0 && ah>0) { g_win_w = aw; g_win_h = ah; }
+    }
+#endif
     ag_window_set_callback(g_win, on_event, NULL);
     ag_window_show(g_win);
 
@@ -370,7 +386,7 @@ int main(void)
                                  0, 0, 0, 0, on_col, (void *)(intptr_t)2);
 
     ag_ui_set_layout_cb(g_ui, on_layout, NULL);
-    on_layout(g_ui, 820, 560, NULL);        
+    on_layout(g_ui, g_win_w, g_win_h, NULL);        
 
     const char *photos[] = { "test.jpg", "test.png", NULL };
     for (int i = 0; photos[i]; ++i) {

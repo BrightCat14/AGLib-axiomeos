@@ -66,7 +66,8 @@ typedef int (*ag_event_cb)(ag_window *w, const ag_event *e, void *userdata);
 
 AGAPI int  ag_init(void);
 AGAPI void ag_shutdown(void);
-AGAPI const char *ag_get_platform(void);  
+AGAPI const char *ag_get_platform(void);
+AGAPI void ag_set_args(int argc, char **argv);  
 
 AGAPI ag_window *ag_window_create(const char *title, int width, int height);
 AGAPI void       ag_window_destroy(ag_window *w);
