@@ -5,7 +5,7 @@
 > 3K SLOC! and just a few libs
 
 **It's Cross-platform**
-> Can work on **UNIX And NT!**
+> Can work on **axiomeOS, UNIX And NT!**
 
 
 ***It's SIMPLE**
@@ -130,7 +130,7 @@ Cleanup
 
 `const char *ag_get_platform(void)`
 
-Returns `"win32"` or `"x11"`
+Returns `"win32"`, `"x11"` or `"axiomeos"`
 
 `void ag_sleep_ms(unsigned int ms)`
 
